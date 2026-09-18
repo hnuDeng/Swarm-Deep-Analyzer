@@ -1,14 +1,13 @@
-# Standard library imports
+"""Core Swarm orchestration engine."""
 import copy
 import json
+import time
+import logging
 from collections import defaultdict
 from typing import List, Callable, Union
 
-# Package/library imports
-from openai import OpenAI
+from openai import OpenAI, APIConnectionError, RateLimitError, APITimeoutError, APIStatusError
 
-
-# Local imports
 from .util import function_to_json, debug_print, merge_chunk
 from .types import (
     Agent,
@@ -22,12 +21,56 @@ from .types import (
 
 __CTX_VARS_NAME__ = "context_variables"
 
+logger = logging.getLogger(__name__)
+
+# Default retry configuration
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BASE_DELAY = 1.0  # seconds
+RETRYABLE_EXCEPTIONS = (APIConnectionError, RateLimitError, APITimeoutError)
+
 
 class Swarm:
-    def __init__(self, client=None):
+    """
+    Stateless multi-agent orchestration engine.
+
+    Manages agent handoffs, tool calls, and context variable passing
+    without maintaining any server-side state between runs.
+    """
+
+    def __init__(self, client=None, max_retries: int = DEFAULT_MAX_RETRIES,
+                 retry_base_delay: float = DEFAULT_RETRY_BASE_DELAY):
         if not client:
             client = OpenAI()
         self.client = client
+        self.max_retries = max_retries
+        self.retry_base_delay = retry_base_delay
+
+    def _call_with_retry(self, **create_params):
+        """
+        Call the OpenAI API with exponential backoff retry for transient errors.
+
+        Retries on: connection errors, rate limits, timeouts.
+        Does NOT retry on: authentication errors, invalid requests, etc.
+        """
+        last_exception = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self.client.chat.completions.create(**create_params)
+            except RETRYABLE_EXCEPTIONS as e:
+                last_exception = e
+                if attempt < self.max_retries:
+                    delay = self.retry_base_delay * (2 ** attempt)
+                    logger.warning(
+                        "API call failed (attempt %d/%d): %s. Retrying in %.1fs...",
+                        attempt + 1, self.max_retries + 1, str(e), delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "API call failed after %d attempts: %s",
+                        self.max_retries + 1, str(e),
+                    )
+        raise last_exception
 
     def get_chat_completion(
         self,
@@ -38,6 +81,7 @@ class Swarm:
         stream: bool,
         debug: bool,
     ) -> ChatCompletionMessage:
+        """Get a chat completion from the API for the given agent and history."""
         context_variables = defaultdict(str, context_variables)
         instructions = (
             agent.instructions(context_variables)
@@ -66,9 +110,10 @@ class Swarm:
         if tools:
             create_params["parallel_tool_calls"] = agent.parallel_tool_calls
 
-        return self.client.chat.completions.create(**create_params)
+        return self._call_with_retry(**create_params)
 
     def handle_function_result(self, result, debug) -> Result:
+        """Convert a function's return value into a standardized Result."""
         match result:
             case Result() as result:
                 return result
@@ -93,6 +138,7 @@ class Swarm:
         context_variables: dict,
         debug: bool,
     ) -> Response:
+        """Execute tool calls and collect results."""
         function_map = {f.__name__: f for f in functions}
         partial_response = Response(
             messages=[], agent=None, context_variables={})
@@ -119,7 +165,21 @@ class Swarm:
             # pass context_variables to agent functions
             if __CTX_VARS_NAME__ in func.__code__.co_varnames:
                 args[__CTX_VARS_NAME__] = context_variables
-            raw_result = function_map[name](**args)
+
+            try:
+                raw_result = function_map[name](**args)
+            except Exception as e:
+                error_msg = f"Error executing tool {name}: {type(e).__name__}: {str(e)}"
+                debug_print(debug, error_msg)
+                partial_response.messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "tool_name": name,
+                        "content": error_msg,
+                    }
+                )
+                continue
 
             result: Result = self.handle_function_result(raw_result, debug)
             partial_response.messages.append(
@@ -146,6 +206,7 @@ class Swarm:
         max_turns: int = float("inf"),
         execute_tools: bool = True,
     ):
+        """Run the agent loop in streaming mode, yielding chunks."""
         active_agent = agent
         context_variables = copy.deepcopy(context_variables)
         history = copy.deepcopy(messages)
@@ -155,7 +216,7 @@ class Swarm:
 
             message = {
                 "content": "",
-                "sender": agent.name,
+                "sender": active_agent.name,
                 "role": "assistant",
                 "function_call": None,
                 "tool_calls": defaultdict(
@@ -179,7 +240,7 @@ class Swarm:
 
             yield {"delim": "start"}
             for chunk in completion:
-                delta = json.loads(chunk.choices[0].delta.json())
+                delta = json.loads(chunk.choices[0].delta.model_dump_json())
                 if delta["role"] == "assistant":
                     delta["sender"] = active_agent.name
                 yield delta
@@ -239,6 +300,7 @@ class Swarm:
         max_turns: int = float("inf"),
         execute_tools: bool = True,
     ) -> Response:
+        """Run the agent loop and return the final response."""
         if stream:
             return self.run_and_stream(
                 agent=agent,
