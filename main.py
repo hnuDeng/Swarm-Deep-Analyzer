@@ -19,7 +19,14 @@ import os
 import sys
 import json
 import time
+import hashlib
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from rich.console import Console
+from rich.progress import Progress
+from rich.table import Table
+from rich.markdown import Markdown
 
 from swarm import Swarm
 from swarm.types import AnalysisReport
@@ -124,6 +131,29 @@ def parse_args():
         default=None,
         help="Override the model for all agents (e.g., gpt-4o-mini)"
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=5,
+        help="Number of concurrent workers for batch processing (default: 5)"
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Max retries for OpenAI API calls (default: 3)"
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default=".swarm_cache",
+        help="Directory to store cached analysis results (default: .swarm_cache)"
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable caching and force re-analysis"
+    )
     return parser.parse_args()
 
 
@@ -160,13 +190,35 @@ def find_batch_files(directory, pattern, max_size):
 
 
 def run_deep_analysis(massive_text, debug=False, max_turns=10, stream=False,
-                      model_override=None):
+                      model_override=None, max_retries=3, quiet=False,
+                      cache_dir=".swarm_cache", no_cache=False):
     """Execute the multi-agent analysis pipeline."""
-    print("[System] Starting Swarm-based multi-agent deep analysis...")
-    print("[Warning] This process involves stateless context handoff "
-          "and will consume significant tokens.")
+    content_hash = hashlib.sha256(massive_text.encode('utf-8')).hexdigest()
+    cache_file = None
+    
+    if cache_dir and not no_cache:
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_file = os.path.join(cache_dir, f"{content_hash}.json")
+        if os.path.exists(cache_file):
+            if not quiet:
+                console = Console()
+                console.print(f"[bold green][Cache Hit][/bold green] Loading analysis from {cache_file}")
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                class MockResponse:
+                    messages = [{"content": cached_data["final_content"]}]
+                return MockResponse()
+            except Exception:
+                pass
 
-    client = Swarm()
+    if not quiet:
+        console = Console()
+        console.print("[bold blue][System][/bold blue] Starting Swarm-based multi-agent deep analysis...")
+        console.print("[bold red][Warning][/bold red] This process involves stateless context handoff "
+                      "and will consume significant tokens.")
+
+    client = Swarm(max_retries=max_retries)
 
     if stream:
         response = client.run(
@@ -191,6 +243,12 @@ def run_deep_analysis(massive_text, debug=False, max_turns=10, stream=False,
             if "response" in chunk:
                 final_response = chunk["response"]
         print()
+        
+        if cache_file and final_response:
+            final_content = final_response.messages[-1].get("content", "")
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump({"final_content": final_content}, f, ensure_ascii=False)
+                
         return final_response
     else:
         response = client.run(
@@ -207,36 +265,40 @@ def run_deep_analysis(massive_text, debug=False, max_turns=10, stream=False,
             max_turns=max_turns,
             model_override=model_override,
         )
+        
+        if cache_file and response:
+            final_content = response.messages[-1].get("content", "")
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump({"final_content": final_content}, f, ensure_ascii=False)
+                
         return response
 
 
 def run_batch(args):
     """Run analysis on multiple files in batch mode."""
+    console = Console()
     files = find_batch_files(args.batch, args.pattern, args.max_size)
     if not files:
-        print(f"No files matching '{args.pattern}' found in {args.batch}")
+        console.print(f"[yellow]No files matching '{args.pattern}' found in {args.batch}[/yellow]")
         return
 
-    print(f"[Batch] Found {len(files)} files to analyze")
-    print(f"[Batch] Pattern: {args.pattern}")
-    print(f"[Batch] Max file size: {args.max_size} bytes")
-    print()
+    console.print(f"[bold cyan][Batch][/bold cyan] Found {len(files)} files to analyze")
+    console.print(f"[bold cyan][Batch][/bold cyan] Pattern: {args.pattern}")
+    console.print(f"[bold cyan][Batch][/bold cyan] Max file size: {args.max_size} bytes")
+    console.print(f"[bold cyan][Batch][/bold cyan] Workers: {args.workers}")
+    console.print()
 
     results = []
-    for i, filepath in enumerate(files, 1):
-        print(f"[Batch] ({i}/{len(files)}) Analyzing: {filepath}")
+
+    def process_file(filepath):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 content = f.read()
         except (UnicodeDecodeError, PermissionError) as e:
-            print(f"[Batch] Skipping {filepath}: {e}")
-            results.append({"file": filepath, "error": str(e)})
-            continue
+            return {"file": filepath, "error": str(e)}
 
         if not content.strip():
-            print(f"[Batch] Skipping {filepath}: empty file")
-            results.append({"file": filepath, "error": "empty file"})
-            continue
+            return {"file": filepath, "error": "empty file"}
 
         start_time = time.time()
         response = run_deep_analysis(
@@ -245,48 +307,54 @@ def run_batch(args):
             max_turns=args.max_turns,
             stream=False,
             model_override=args.model,
+            max_retries=args.max_retries,
+            quiet=True,
+            cache_dir=args.cache_dir,
+            no_cache=args.no_cache,
         )
         elapsed = time.time() - start_time
 
+        result_entry = {
+            "file": filepath,
+            "chars": len(content),
+            "elapsed_seconds": round(elapsed, 2),
+            "raw_output": "",
+        }
+
         if response and hasattr(response, "messages"):
             final_content = response.messages[-1].get("content", "")
+            result_entry["raw_output"] = final_content
 
-            # Try to parse structured report
             parsed = extract_json(final_content)
-            report = None
             if parsed:
                 try:
                     report = AnalysisReport(**parsed)
+                    result_entry["total_issues"] = report.total_issues
+                    result_entry["critical"] = report.critical_count
+                    result_entry["high"] = report.high_count
                 except Exception:
                     pass
-
-            result_entry = {
-                "file": filepath,
-                "chars": len(content),
-                "elapsed_seconds": round(elapsed, 2),
-                "raw_output": final_content,
-            }
-            if report:
-                result_entry["total_issues"] = report.total_issues
-                result_entry["critical"] = report.critical_count
-                result_entry["high"] = report.high_count
-                print(f"[Batch]   -> {report.total_issues} issues "
-                      f"({report.critical_count} critical, {report.high_count} high) "
-                      f"in {elapsed:.1f}s")
-            else:
-                print(f"[Batch]   -> Analysis complete in {elapsed:.1f}s")
-
-            results.append(result_entry)
-
-            # Save individual report if output dir specified
-            if args.output:
-                os.makedirs(args.output, exist_ok=True)
-                basename = Path(filepath).stem + "_report.json"
-                report_path = os.path.join(args.output, basename)
-                with open(report_path, "w", encoding="utf-8") as f:
-                    json.dump(result_entry, f, indent=2, ensure_ascii=False)
         else:
-            results.append({"file": filepath, "error": "no response"})
+            result_entry["error"] = "no response"
+
+        if args.output and "error" not in result_entry:
+            os.makedirs(args.output, exist_ok=True)
+            basename = Path(filepath).stem + "_report.json"
+            report_path = os.path.join(args.output, basename)
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(result_entry, f, indent=2, ensure_ascii=False)
+
+        return result_entry
+
+    with Progress() as progress:
+        task = progress.add_task("[cyan]Analyzing files...", total=len(files))
+        
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            future_to_file = {executor.submit(process_file, f): f for f in files}
+            for future in as_completed(future_to_file):
+                res = future.result()
+                results.append(res)
+                progress.advance(task)
 
     # Save summary
     summary = {
@@ -300,11 +368,30 @@ def run_batch(args):
         summary_path = os.path.join(args.output, "batch_summary.json")
         with open(summary_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2, ensure_ascii=False)
-        print(f"\n[Batch] Summary saved to: {summary_path}")
+        console.print(f"\n[bold green][Batch][/bold green] Summary saved to: {summary_path}")
 
-    print(f"\n[Batch] Complete: {summary['analyzed']}/{summary['total_files']} files analyzed")
+    console.print(f"\n[bold green][Batch][/bold green] Complete: {summary['analyzed']}/{summary['total_files']} files analyzed")
     if summary["errors"] > 0:
-        print(f"[Batch] Errors: {summary['errors']}")
+        console.print(f"[bold red][Batch] Errors: {summary['errors']}[/bold red]")
+
+    # Print Table
+    table = Table(title="Batch Analysis Summary")
+    table.add_column("File", justify="left", style="cyan", no_wrap=True)
+    table.add_column("Time (s)", justify="right", style="magenta")
+    table.add_column("Issues", justify="right", style="red")
+    table.add_column("Status", justify="center", style="green")
+
+    for r in results:
+        fname = os.path.basename(r["file"])
+        if "error" in r:
+            table.add_row(fname, "-", "-", f"[red]Error: {r['error']}[/red]")
+        else:
+            issues = str(r.get("total_issues", "?"))
+            if r.get("critical", 0) > 0:
+                issues += f" [bold red]({r['critical']}C)[/bold red]"
+            table.add_row(fname, str(r["elapsed_seconds"]), issues, "[green]OK[/green]")
+
+    console.print(table)
 
 
 def run_demo(args):
@@ -341,14 +428,18 @@ def main():
         max_turns=args.max_turns,
         stream=args.stream,
         model_override=args.model,
+        max_retries=args.max_retries,
+        cache_dir=args.cache_dir,
+        no_cache=args.no_cache,
     )
 
     if response and hasattr(response, "messages"):
         final_content = response.messages[-1].get("content", "")
-        print("\n[System] Analysis complete. Final report:")
-        print("=" * 60)
-        print(final_content)
-        print("=" * 60)
+        console = Console()
+        console.print("\n[bold blue][System][/bold blue] Analysis complete. Final report:")
+        console.print("=" * 60)
+        console.print(Markdown(final_content))
+        console.print("=" * 60)
 
         if args.output:
             with open(args.output, "w", encoding="utf-8") as f:

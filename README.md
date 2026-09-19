@@ -1,21 +1,54 @@
-# Swarm-Deep-Analyzer: Stateless Multi-Agent Reasoning Engine
+<div align="center">
 
-![Python Version](https://img.shields.io/badge/python-3.10%2B-blue)
-![OpenAI](https://img.shields.io/badge/OpenAI-Swarm-2ea44f)
-![License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-Experimental-orange)
+# 🧠 Swarm-Deep-Analyzer
+
+**Stateless Multi-Agent Reasoning Engine**
+
+[English](README.md) | [中文](README_zh.md)
+
+![Python Version](https://img.shields.io/badge/python-3.10%2B-blue?style=for-the-badge&logo=python)
+![OpenAI](https://img.shields.io/badge/OpenAI-Swarm-2ea44f?style=for-the-badge&logo=openai)
+![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
+![Status](https://img.shields.io/badge/status-Experimental-orange?style=for-the-badge)
 
 A highly customized, long-context reasoning system built purely on [OpenAI's Swarm](https://github.com/openai/swarm) framework. This project minimizes local boilerplate code and completely shifts the cognitive load and routing logic to the LLM's native multi-step reasoning capabilities.
 
+</div>
+
 ---
 
-## Project Abstract
+## 📑 Table of Contents
+
+- [📖 Project Abstract](#-project-abstract)
+- [✨ Key Features](#-key-features)
+- [🏗 System Architecture & Topology](#-system-architecture--topology)
+- [⚠️ The Token Consumption Paradigm](#️-the-token-consumption-paradigm)
+- [⚙️ Installation & Setup](#️-installation--setup)
+- [🚀 Execution](#-execution)
+- [💡 Primary Use Cases](#-primary-use-cases)
+- [💻 API Usage](#-api-usage)
+- [📁 Project Structure](#-project-structure)
+- [🧪 Running Tests](#-running-tests)
+- [🤝 Contributing](#-contributing)
+- [📄 License](#-license)
+
+---
+
+## 📖 Project Abstract
 
 In complex domains such as deep logical auditing and long-document natural language processing (NLP), traditional single-prompt LLM calls frequently suffer from hallucination and "lost-in-the-middle" memory degradation. 
 
 **Swarm-Deep-Analyzer** solves this by orchestrating a specialized network of Agents. Instead of relying on local vector databases (RAG) which chunk and destroy structural integrity, this system utilizes a **Stateless Context Handoff** mechanism. The entire raw context, along with the evolving Chain-of-Thought (CoT) reasoning history, is dynamically passed between expert agents to maintain 100% logical fidelity.
 
-## System Architecture & Multi-Agent Topology
+## ✨ Key Features
+
+- **Stateless Context Handoff**: Passes full raw context and CoT history between agents without relying on RAG chunking.
+- **Sequential Tri-Node Topology**: `Extractor` ➡️ `Analyzer` ➡️ `Reviewer` for precise logical auditing.
+- **High-Fidelity Long-Context Analysis**: Designed for massive text processing, such as full source code or multi-page journals.
+- **Batch Processing & Caching**: Analyze entire directories recursively, with built-in caching for efficiency.
+- **Extensible Framework**: Easy to define custom agents, handoff rules, and integrate into larger Python applications.
+
+## 🏗 System Architecture & Topology
 
 The framework currently implements a three-node sequential reasoning pipeline:
 
@@ -25,7 +58,9 @@ The framework currently implements a three-node sequential reasoning pipeline:
 | **2. Analyzer** | The core inference engine. Applies rigorous CoT logic to identify flaws or patterns. | Extractor's output + Original Text. | Triggers handoff to Reviewer with a detailed vulnerability/sentiment hypothesis. |
 | **3. Reviewer** | Cross-validates the Analyzer's findings against baseline constraints. | Full trajectory from Extractor & Analyzer. | Generates the final structured JSON remediation report. |
 
-## The Token Consumption Paradigm (Why High API Limits are Required)
+## ⚠️ The Token Consumption Paradigm
+
+> **Note:** Why High API Limits are Required
 
 This project intentionally sacrifices token economy for reasoning accuracy. Due to Swarm's stateless nature, context window usage grows exponentially during a single execution loop:
 
@@ -35,7 +70,7 @@ This project intentionally sacrifices token economy for reasoning accuracy. Due 
 
 A standard analysis run involving thousands of lines of code or multi-page academic journals easily consumes **60k - 100k+ tokens per complete cycle**. High rate limits and large token quotas are mathematically essential for the system to function without API throttling.
 
-## Installation & Setup
+## ⚙️ Installation & Setup
 
 ### Prerequisites
 
@@ -63,13 +98,16 @@ export OPENAI_API_KEY="sk-your-key-here"
 $env:OPENAI_API_KEY = "sk-your-key-here"
 ```
 
-## Execution
+## 🚀 Execution
 
 ### Quick Start (built-in sample)
 
 ```bash
 python main.py
 ```
+
+<details>
+<summary><strong>More Execution Commands (Click to expand)</strong></summary>
 
 ### Analyze a File
 
@@ -89,20 +127,21 @@ python main.py --text "Your text to analyze goes here..."
 python main.py --file input.txt --output report.json
 ```
 
-### Enable Debug Logging
+### Advanced Modes
 
 ```bash
+# Enable Debug Logging
 python main.py --debug
-```
 
-### Enable Streaming Output
-
-```bash
+# Enable Streaming Output
 python main.py --stream
+
+# Interactive Demo Loop
+python main.py --demo
 ```
+</details>
 
-
-### Batch Processing
+### 📦 Batch Processing
 
 Analyze multiple files at once:
 
@@ -122,13 +161,8 @@ python main.py --batch ./src --model gpt-4o-mini
 
 Batch mode recursively finds matching files, analyzes each one, and optionally saves individual reports plus a summary JSON.
 
-### Interactive Demo Loop
-
-```bash
-python main.py --demo
-```
-
-### All CLI Options
+<details>
+<summary><strong>All CLI Options</strong></summary>
 
 | Flag | Description | Default |
 |------|-------------|---------|
@@ -136,15 +170,21 @@ python main.py --demo
 | `--text`, `-t` | Inline text to analyze | None |
 | `--batch`, `-b` | Directory path for batch processing | None |
 | `--pattern`, `-p` | File pattern for batch mode | `*.py` |
-| `--max-size` | Max file size in bytes for batch mode | 100000 |
-| `--demo` | Launch interactive REPL | False |
-| `--debug` | Enable verbose token handoff logging | False |
-| `--max-turns` | Maximum agent conversation turns | 10 |
+| `--max-size` | Max file size in bytes for batch mode | `100000` |
+| `--demo` | Launch interactive REPL | `False` |
+| `--debug` | Enable verbose token handoff logging | `False` |
+| `--max-turns` | Maximum agent conversation turns | `10` |
 | `--output`, `-o` | Save final report to file/directory | None |
-| `--stream` | Enable streaming output | False |
+| `--stream` | Enable streaming output | `False` |
 | `--model` | Override model for all agents | None (uses agent default) |
+| `--workers` | Number of concurrent workers for batch processing | `5` |
+| `--max-retries`| Max retries for OpenAI API calls | `3` |
+| `--cache-dir` | Directory to store cached analysis results | `.swarm_cache` |
+| `--no-cache` | Disable caching and force re-analysis | `False` |
 
-## Primary Use Cases
+</details>
+
+## 💡 Primary Use Cases
 
 ### 1. Algorithmic Complexity & Underlying Data Structure Auditing
 Traditional static analysis fails on custom data structures. This agent network reads full source code files (C++/Python) dealing with complex structures (e.g., segment trees, disjoint set unions, skew heaps). It traces pointer arithmetic and recursive depth to identify memory management flaws and algorithm complexity bottlenecks that standard tools miss.
@@ -152,58 +192,7 @@ Traditional static analysis fails on custom data structures. This agent network 
 ### 2. NLP: Long-Document Sentiment Evolution Analysis
 The system is optimized for tracking public sentiment shifts across massive datasets (e.g., analyzing regional tourism booms and topic evolution). The Extractor aggregates raw sociological data, the Analyzer maps sentiment trajectories, and the Reviewer compiles the findings into an academic-ready format suitable for SCI/SSCI research methodologies.
 
-## Project Structure
-
-```
-Swarm-Deep-Analyzer/
-├── main.py                  # Entry point with CLI argument parsing
-├── agents.py                # Agent definitions (Extractor, Analyzer, Reviewer)
-├── pyproject.toml           # Build configuration and dependencies
-├── LICENSE                  # MIT License
-├── .gitignore               # Git ignore rules
-├── .pre-commit-config.yaml  # Pre-commit hook configuration
-├── swarm/                   # Core Swarm framework
-│   ├── __init__.py          # Package exports
-│   ├── core.py              # Swarm class (run, streaming, tool handling)
-│   ├── types.py             # Agent, Response, Result type definitions
-│   ├── util.py              # Utility functions (debug, merge, function_to_json)
-│   └── repl/
-│       ├── __init__.py
-│       └── repl.py          # Interactive demo loop
-├── tests/                   # Test suite
-│   ├── mock_client.py       # Mock OpenAI client for testing
-│   ├── test_core.py         # Core Swarm functionality tests
-│   ├── test_util.py         # Utility function tests
-│   ├── test_agents.py       # Agent definition tests
-│   ├── test_main.py         # CLI entry point tests
-│   └── test_repl.py         # REPL module tests
-└── examples/                # Example applications
-    ├── basic/               # Simple usage examples
-    ├── airline/             # Customer service airline example
-    ├── personal_shopper/    # Shopping assistant example
-    ├── support_bot/         # Knowledge-base support bot
-    ├── triage_agent/        # Agent triage routing example
-    ├── weather_agent/       # Weather query example
-    └── customer_service*/   # Customer service examples
-```
-
-## Running Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run with verbose output
-pytest -v
-
-# Run specific test file
-pytest tests/test_core.py -v
-
-# Run with coverage (if pytest-cov is installed)
-pytest --cov=swarm --cov=agents --cov=main
-```
-
-## API Usage
+## 💻 API Usage
 
 You can also use the framework programmatically:
 
@@ -223,6 +212,9 @@ response = client.run(
 
 print(response.messages[-1]["content"])
 ```
+
+<details>
+<summary><strong>Advanced API Examples</strong></summary>
 
 ### Custom Agent Example
 
@@ -250,7 +242,6 @@ response = client.run(
 )
 ```
 
-
 ### Structured Output Parsing
 
 The pipeline output can be parsed into typed Pydantic models:
@@ -273,6 +264,55 @@ if data:
         print(f"  [{issue.severity}] {issue.description}")
 ```
 
-## License
+</details>
+
+## 📁 Project Structure
+
+<details>
+<summary><strong>View Directory Tree</strong></summary>
+
+```text
+Swarm-Deep-Analyzer/
+├── main.py                  # Entry point with CLI argument parsing
+├── agents.py                # Agent definitions (Extractor, Analyzer, Reviewer)
+├── prompts/                 # System prompts for each agent
+├── pyproject.toml           # Build configuration and dependencies
+├── LICENSE                  # MIT License
+├── .gitignore               # Git ignore rules
+├── .pre-commit-config.yaml  # Pre-commit hook configuration
+├── swarm/                   # Core Swarm framework
+│   ├── core.py              # Swarm class (run, streaming, tool handling)
+│   ├── types.py             # Agent, Response, Result type definitions
+│   └── ...
+├── tests/                   # Test suite
+└── examples/                # Example applications
+```
+
+</details>
+
+## 🧪 Running Tests
+
+```bash
+# Run all tests
+pytest
+
+# Run with verbose output
+pytest -v
+
+# Run with coverage (if pytest-cov is installed)
+pytest --cov=swarm --cov=agents --cov=main
+```
+
+## 🤝 Contributing
+
+Contributions, issues, and feature requests are welcome! Feel free to check [issues page](https://github.com/hnuDeng/Swarm-Deep-Analyzer/issues). 
+If you find this project helpful, please give it a ⭐️!
+
+## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+---
+<div align="center">
+Made with ❤️ by <a href="https://github.com/hnuDeng">Deng</a>
+</div>
