@@ -10,6 +10,7 @@
 ![OpenAI](https://img.shields.io/badge/OpenAI-Swarm-2ea44f?style=for-the-badge&logo=openai)
 ![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 ![Status](https://img.shields.io/badge/status-Experimental-orange?style=for-the-badge)
+[![CI](https://github.com/hnuDeng/Swarm-Deep-Analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/hnuDeng/Swarm-Deep-Analyzer/actions/workflows/ci.yml)
 
 A highly customized, long-context reasoning system built purely on [OpenAI's Swarm](https://github.com/openai/swarm) framework. This project minimizes local boilerplate code and completely shifts the cognitive load and routing logic to the LLM's native multi-step reasoning capabilities.
 
@@ -38,7 +39,7 @@ A highly customized, long-context reasoning system built purely on [OpenAI's Swa
 
 In complex domains such as deep logical auditing and long-document natural language processing (NLP), traditional single-prompt LLM calls frequently suffer from hallucination and "lost-in-the-middle" memory degradation. 
 
-**Swarm-Deep-Analyzer** solves this by orchestrating a specialized network of Agents. Instead of relying on local vector databases (RAG) which chunk and destroy structural integrity, this system utilizes a **Stateless Context Handoff** mechanism. The entire raw context, along with the evolving Chain-of-Thought (CoT) reasoning history, is dynamically passed between expert agents to maintain 100% logical fidelity.
+**Swarm-Deep-Analyzer** orchestrates a specialized network of agents using **Stateless Context Handoff**. The input and accumulated conversation are passed between agents for successive analysis and review. Model outputs can still contain errors; validate findings against the original material before applying recommendations.
 
 ## ✨ Key Features
 
@@ -62,13 +63,13 @@ The framework currently implements a three-node sequential reasoning pipeline:
 
 > **Note:** Why High API Limits are Required
 
-This project intentionally sacrifices token economy for reasoning accuracy. Due to Swarm's stateless nature, context window usage grows exponentially during a single execution loop:
+Each model call receives the accumulated conversation, so later turns resend earlier input and outputs:
 
 * **Step 1:** Extractor processes `T` tokens.
 * **Step 2:** Analyzer receives `T` + Extractor's output (`E`), consuming `T + E` tokens.
 * **Step 3:** Reviewer receives `T + E` + Analyzer's output (`A`), consuming `T + E + A` tokens.
 
-A standard analysis run involving thousands of lines of code or multi-page academic journals easily consumes **60k - 100k+ tokens per complete cycle**. High rate limits and large token quotas are mathematically essential for the system to function without API throttling.
+For these three calls, input usage totals approximately `3T + 2E + A`, plus instructions and tool messages. Actual usage and cost depend on input size, model, output length, and handoffs. Use `--max-turns` to limit the run and check your API usage when processing large batches.
 
 ## ⚙️ Installation & Setup
 
@@ -181,6 +182,10 @@ Batch mode recursively finds matching files, analyzes each one, and optionally s
 | `--max-retries`| Max retries for OpenAI API calls | `3` |
 | `--cache-dir` | Directory to store cached analysis results | `.swarm_cache` |
 | `--no-cache` | Disable caching and force re-analysis | `False` |
+
+Cached results are scoped to the input, effective agent models, turn limit, prompts, and handoff tool names. Changing these settings triggers a new analysis. Cached responses preserve messages and context; writes use atomic replacement so parallel workers cannot expose a partially written result. Corrupt or unavailable caches fall back to analysis. Dynamic callable prompts bypass caching. Older cache files are ignored; `--no-cache` bypasses both reads and writes.
+
+The cache contains input-derived reports and conversation messages in plain text. Choose an appropriate `--cache-dir` for sensitive inputs, or use `--no-cache`. The default `.swarm_cache/` is excluded from Git.
 
 </details>
 
