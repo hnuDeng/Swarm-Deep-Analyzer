@@ -1,0 +1,30 @@
+[
+  {
+    "id": "division-by-zero",
+    "input": "def average(total, count):\n    return total / count\n",
+    "human_label": "Division by zero is possible when count is zero.",
+    "replay": {
+      "single": [
+        {"content": "{\"issues\":[{\"issue_id\":1,\"category\":\"logic_flaw\",\"severity\":\"medium\",\"confidence\":\"high\",\"location\":\"average\",\"description\":\"Zero count causes division by zero.\",\"recommendation\":\"Handle zero count.\"}],\"summary\":\"One synthetic finding.\",\"total_issues\":1}"}
+      ],
+      "multi": [
+        {"content": "Synthetic context: average divides by count.", "tools": ["transfer_to_analyzer"]},
+        {"content": "Synthetic hypothesis: count may be zero.", "tools": ["transfer_to_reviewer"]},
+        {"content": "{\"issues\":[{\"issue_id\":1,\"category\":\"logic_flaw\",\"severity\":\"medium\",\"confidence\":\"high\",\"location\":\"average\",\"description\":\"Zero count causes division by zero.\",\"recommendation\":\"Handle zero count.\"}],\"summary\":\"One synthetic finding.\",\"total_issues\":1}"}
+      ]
+    }
+  },
+  {
+    "id": "guarded-division",
+    "input": "def average(total, count):\n    if count == 0:\n        return None\n    return total / count\n",
+    "human_label": "The zero divisor is guarded for numeric inputs.",
+    "replay": {
+      "single": [{"content": "{\"issues\":[],\"summary\":\"No synthetic finding for the labeled zero-divisor case.\",\"total_issues\":0}"}],
+      "multi": [
+        {"content": "Synthetic context: zero count returns None.", "tools": ["transfer_to_analyzer"]},
+        {"content": "Synthetic hypothesis: zero divisor is guarded.", "tools": ["transfer_to_reviewer"]},
+        {"content": "{\"issues\":[],\"summary\":\"No synthetic finding for the labeled zero-divisor case.\",\"total_issues\":0}"}
+      ]
+    }
+  }
+]

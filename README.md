@@ -101,6 +101,12 @@ $env:OPENAI_API_KEY = "sk-your-key-here"
 
 ## 🚀 Execution
 
+### Offline replay comparison
+
+With the project's Python dependencies already available, run `python -m offline_comparison` from the repository root. This needs no API key, makes no network calls, and does not read or write the online analysis cache. It prints JSON for two hand-labeled synthetic cases in [offline_cases.json](offline_cases.json). Each case runs the same input through a single agent and through the existing Extractor → Analyzer → Reviewer handoffs using `Swarm.run`. The output records the actual stage sequence, provider call count, and validated structured report; invalid reports, incomplete handoffs, and provider errors fail the command.
+
+The provider responses are fixed local fixtures, not model predictions. This replay validates the comparison harness only and cannot establish real LLM accuracy, quality, token usage, cost, or latency. These measurements are `null` in the output. For a future real-model experiment, use the [recording template](offline_results_template.md) and independently record the source and conditions for each measurement.
+
 ### Quick Start (built-in sample)
 
 ```bash
