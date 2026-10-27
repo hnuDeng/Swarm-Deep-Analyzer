@@ -10,6 +10,7 @@
 ![OpenAI](https://img.shields.io/badge/OpenAI-Swarm-2ea44f?style=for-the-badge&logo=openai)
 ![License](https://img.shields.io/badge/license-MIT-green?style=for-the-badge)
 ![Status](https://img.shields.io/badge/status-Experimental-orange?style=for-the-badge)
+[![CI](https://github.com/hnuDeng/Swarm-Deep-Analyzer/actions/workflows/ci.yml/badge.svg)](https://github.com/hnuDeng/Swarm-Deep-Analyzer/actions/workflows/ci.yml)
 
 一个完全基于 [OpenAI Swarm](https://github.com/openai/swarm) 框架构建的高度定制化的长上下文推理系统。该项目最大限度地减少了本地样板代码，将认知负载和路由逻辑完全交给了 LLM 原生的多步推理能力。
 
@@ -38,7 +39,7 @@
 
 在诸如深度逻辑审计和长文档自然语言处理（NLP）等复杂领域，传统的单提示词 LLM 调用经常面临幻觉和“迷失在中间”的记忆退化问题。
 
-**Swarm-Deep-Analyzer** 通过编排一个专门的智能体（Agents）网络来解决这个问题。该系统不依赖于对数据分块从而破坏结构完整性的本地向量数据库（RAG），而是采用了**无状态上下文交接（Stateless Context Handoff）**机制。完整的原始上下文连同不断演进的思维链（CoT）推理历史，在专家智能体之间动态传递，以保持 100% 的逻辑保真度。
+**Swarm-Deep-Analyzer** 采用**无状态上下文交接（Stateless Context Handoff）**机制，将输入及累积的对话传递给不同智能体，依次完成分析和复核。模型输出仍可能存在错误，应用建议前应对照原始材料验证发现。
 
 ## ✨ 核心特性
 
@@ -62,13 +63,13 @@
 
 > **注意：** 为什么需要高 API 限制
 
-该项目有意牺牲 Token 经济性以换取推理准确性。由于 Swarm 的无状态特性，在一个执行循环中上下文窗口的使用量会呈指数级增长：
+每次模型调用都接收累积的对话，因此后续轮次会重复发送之前的输入和输出：
 
 * **第 1 步：** 提取器处理 `T` 个 Token。
 * **第 2 步：** 分析器接收 `T` + 提取器的输出 (`E`)，消耗 `T + E` 个 Token。
 * **第 3 步：** 审查器接收 `T + E` + 分析器的输出 (`A`)，消耗 `T + E + A` 个 Token。
 
-一次标准的分析（涉及数千行代码或多页学术期刊）在一个完整循环中很容易消耗 **60k - 100k+ Token**。因此，高并发限制和大量 Token 额度在数学上是系统无 API 节流运行的必要条件。
+上述三次调用的输入量合计约为 `3T + 2E + A`，另加指令和工具消息。实际用量及费用取决于输入规模、模型、输出长度和交接次数。可用 `--max-turns` 限制轮数，并在处理大批量文件时检查 API 用量。
 
 ## ⚙️ 安装与配置
 
@@ -99,6 +100,12 @@ $env:OPENAI_API_KEY = "sk-your-key-here"
 ```
 
 ## 🚀 执行方式
+
+### 离线回放对照
+
+在项目已有 Python 依赖的环境中，从仓库根目录运行 `python -m offline_comparison`。此命令无需 API 密钥，不发起网络请求，也不读取或写入在线分析缓存。它输出两个[手工标注的合成案例](offline_cases.json)的 JSON 结果：每个输入分别经过单智能体和现有的提取器 → 分析器 → 审查器交接，均调用实际的 `Swarm.run`。结果记录阶段顺序、提供方调用次数及经过验证的结构化报告；报告无效、交接不完整或提供方出错时命令会失败。
+
+提供方响应是固定的本地回放数据，并非模型预测。此对照只验证运行框架，不能证明真实模型的准确率或质量，也没有测量 token、成本或耗时；这些字段以 `null` 表示。未来开展真实模型对照时，可使用[结果记录模板](offline_results_template.md)，独立记录测量来源和实验条件。
 
 ### 快速开始 (内置示例)
 
@@ -181,6 +188,10 @@ python main.py --batch ./src --model gpt-4o-mini
 | `--max-retries`| OpenAI API 调用的最大重试次数 | `3` |
 | `--cache-dir` | 存储分析结果缓存的目录 | `.swarm_cache` |
 | `--no-cache` | 禁用缓存并强制重新分析 | `False` |
+
+缓存按输入、智能体实际使用的模型、轮数上限、提示词和交接工具名称区分；修改这些设置后会重新分析。命中缓存时保留消息和上下文，缓存写入采用原子替换，避免并发任务读到未写完的结果。缓存损坏或不可用时继续分析。函数形式的动态提示词会跳过缓存。旧版缓存自动忽略，`--no-cache` 同时跳过缓存读取和写入。
+
+缓存以明文保存分析报告和对话消息。处理敏感输入时，可选择合适的 `--cache-dir`，或使用 `--no-cache`。默认 `.swarm_cache/` 已加入 Git 忽略规则。
 
 </details>
 

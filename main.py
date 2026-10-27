@@ -20,6 +20,8 @@ import sys
 import json
 import time
 import hashlib
+import logging
+import tempfile
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -29,9 +31,9 @@ from rich.table import Table
 from rich.markdown import Markdown
 
 from swarm import Swarm
-from swarm.types import AnalysisReport
+from swarm.types import AnalysisReport, Response
 from swarm.util import extract_json
-from agents import extractor_agent
+from agents import extractor_agent, analyzer_agent, reviewer_agent
 
 
 BUILT_IN_SAMPLE = """
@@ -189,27 +191,91 @@ def find_batch_files(directory, pattern, max_size):
     return filtered
 
 
+def _save_cached_response(cache_file, response):
+    if not cache_file or not response or not response.messages:
+        return
+
+    temporary_path = None
+    try:
+        cached_data = {
+            "messages": response.messages,
+            "context_variables": response.context_variables,
+            "agent_name": response.agent.name if response.agent else None,
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=Path(cache_file).parent,
+            suffix=".tmp", delete=False,
+        ) as cache_handle:
+            temporary_path = Path(cache_handle.name)
+            json.dump(cached_data, cache_handle, ensure_ascii=False)
+        os.replace(temporary_path, cache_file)
+    except (OSError, TypeError, ValueError):
+        logging.getLogger(__name__).warning("Could not save analysis cache", exc_info=True)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                logging.getLogger(__name__).warning("Could not remove temporary cache file", exc_info=True)
+
+
 def run_deep_analysis(massive_text, debug=False, max_turns=10, stream=False,
                       model_override=None, max_retries=3, quiet=False,
                       cache_dir=".swarm_cache", no_cache=False):
     """Execute the multi-agent analysis pipeline."""
-    content_hash = hashlib.sha256(massive_text.encode('utf-8')).hexdigest()
+    pipeline_agents = (extractor_agent, analyzer_agent, reviewer_agent)
     cache_file = None
     
-    if cache_dir and not no_cache:
-        os.makedirs(cache_dir, exist_ok=True)
-        cache_file = os.path.join(cache_dir, f"{content_hash}.json")
-        if os.path.exists(cache_file):
-            if not quiet:
-                console = Console()
-                console.print(f"[bold green][Cache Hit][/bold green] Loading analysis from {cache_file}")
+    if cache_dir and not no_cache and not any(
+        callable(agent.instructions) for agent in pipeline_agents
+    ):
+        cache_settings = {
+            "version": 2,
+            "text": massive_text,
+            "max_turns": max_turns,
+            "agents": [
+                {
+                    "name": agent.name,
+                    "model": model_override or agent.model,
+                    "instructions": agent.instructions,
+                    "tools": [function.__name__ for function in agent.functions],
+                }
+                for agent in pipeline_agents
+            ],
+        }
+        content_hash = hashlib.sha256(
+            json.dumps(cache_settings, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_file = os.path.join(cache_dir, f"{content_hash}.json")
+        except OSError:
+            logging.getLogger(__name__).warning("Analysis cache is unavailable", exc_info=True)
+
+        if cache_file and os.path.exists(cache_file):
             try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                class MockResponse:
-                    messages = [{"content": cached_data["final_content"]}]
-                return MockResponse()
-            except Exception:
+                with open(cache_file, "r", encoding="utf-8") as cache_handle:
+                    cached_data = json.load(cache_handle)
+                cached_response = Response(
+                    messages=cached_data["messages"],
+                    context_variables=cached_data["context_variables"],
+                    agent=next(
+                        (agent for agent in pipeline_agents
+                         if agent.name == cached_data["agent_name"]), None,
+                    ),
+                )
+                if cached_response.messages and all(
+                    isinstance(message, dict)
+                    and message.get("role") in {"assistant", "tool", "user", "system", "developer", "function"}
+                    and (message.get("content") is None or isinstance(message["content"], str))
+                    for message in cached_response.messages
+                ) and isinstance(cached_response.messages[-1].get("content"), str):
+                    if not quiet:
+                        Console().print(
+                            f"[bold green][Cache Hit][/bold green] Loading analysis from {cache_file}"
+                        )
+                    return cached_response
+            except (OSError, ValueError, KeyError, TypeError):
                 pass
 
     if not quiet:
@@ -244,10 +310,7 @@ def run_deep_analysis(massive_text, debug=False, max_turns=10, stream=False,
                 final_response = chunk["response"]
         print()
         
-        if cache_file and final_response:
-            final_content = final_response.messages[-1].get("content", "")
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump({"final_content": final_content}, f, ensure_ascii=False)
+        _save_cached_response(cache_file, final_response)
                 
         return final_response
     else:
@@ -266,10 +329,7 @@ def run_deep_analysis(massive_text, debug=False, max_turns=10, stream=False,
             model_override=model_override,
         )
         
-        if cache_file and response:
-            final_content = response.messages[-1].get("content", "")
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump({"final_content": final_content}, f, ensure_ascii=False)
+        _save_cached_response(cache_file, response)
                 
         return response
 

@@ -1,4 +1,5 @@
 # Editors
+.swarm_cache/
 .vscode/
 .idea/
 
